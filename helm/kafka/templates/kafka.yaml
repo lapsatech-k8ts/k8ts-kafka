@@ -1,0 +1,163 @@
+{{- $brokers := $.Values.app.brokers.count | int }}
+{{- range $nodeIndex := until $brokers }}
+  {{- $serverPort := add ( mul $.Values.app.node.ports.prefix 10 ) $nodeIndex | int }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-broker-{{ $nodeIndex }}
+  labels:
+    app: {{ $.Release.Name }}
+    svc-type: broker
+    node-index: '{{ $nodeIndex }}'
+spec:
+  ports:
+  - name: server
+    port: {{ $serverPort }}
+  selector:
+    app: {{ $.Release.Name }}
+    pod-type: broker
+    node-index: '{{ $nodeIndex }}'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-broker-{{ $nodeIndex }}
+  labels:
+    app: {{ $.Release.Name }}
+    deployment-type: broker
+    node-index: '{{ $nodeIndex }}'
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ $.Release.Name }}
+      pod-type: broker
+      node-index: '{{ $nodeIndex }}'
+  template:
+    metadata:
+      labels:
+        app: {{ $.Release.Name }}
+        pod-type: broker
+        node-index: '{{ $nodeIndex }}'
+    spec:
+  {{- if eq $.Values.deployment.antiAffinity "hard"}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: "app"
+                operator: In
+                values:
+                - {{ $.Release.Name | quote }}
+              - key: "pod-type"
+                operator: In
+                values:
+                - "node"
+            topologyKey: "kubernetes.io/hostname"
+  {{- else if eq $.Values.deployment.antiAffinity "soft"}}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: "app"
+                  operator: In
+                  values:
+                  - {{ $.Release.Name | quote }}
+                - key: "pod-type"
+                  operator: In
+                  values:
+                  - "node"
+              topologyKey: "kubernetes.io/hostname"
+  {{- end}}
+      terminationGracePeriodSeconds: {{ $.Values.app.node.terminationGracePeriodSeconds }}
+      containers:
+      - name: {{ $.Release.Name }}-borker
+        imagePullPolicy: Always
+        image: "localhost:5000/lapsatech/kubernetes-kafka_3.6:latest"
+        resources:
+          limits:
+            memory: {{ $.Values.app.node.limits.memory | quote }}
+            cpu: {{ $.Values.app.node.limits.cpu | quote }}
+        ports:
+        - name: server
+          containerPort: {{ $serverPort }}
+        env:
+        - name: NODE_LISTEN_PORT
+          value: {{ $serverPort | quote }}
+        - name: NODE_SVC_NAME
+          value: "{{ $.Release.Name }}-broker-{{ $nodeIndex }}.{{ $.Release.Namespace }}.svc.cluster.local"
+        - name: NODE_INDEX
+          value: "{{ $nodeIndex }}"
+        - name: DATA_DIR
+          value: "{{ $.Values.app.node.storage.mountPath }}/data"
+        - name: LOCAL_LOGS_DIR
+          value: "/tmp/logs"
+        - name: MEMORY_HEAP
+          value: {{ $.Values.app.kafka.heap | quote }}
+        - name: LOG_LEVEL
+          value: INFO
+        - name: "ZOOKEEPER_CONNECT"
+          value: "{{ $.Values.zk.svc.host }}:{{ $.Values.zk.svc.port }}/kafka/{{ $.Release.Name }}"
+  {{- range $k, $v := $.Values.app.kafka.overrides }}
+        - name: "OVERRIDE_{{ $k }}"
+          value: {{ $v | quote }}
+  {{- end }}
+  {{- if $.Values.deployment.probes.readiness.enabled }}
+        readinessProbe:
+          exec:
+            command:
+            - kafka-ready.sh
+          failureThreshold: 10
+          initialDelaySeconds: 60
+          periodSeconds: 60
+          timeoutSeconds: 30
+  {{- end }}
+  {{- if $.Values.deployment.probes.liveness.enabled }}
+        livenessProbe:
+          exec:
+            command:
+            - kafka-ready.sh
+          failureThreshold: 10
+          initialDelaySeconds: 120
+          periodSeconds: 120
+          timeoutSeconds: 30
+  {{- end }}
+        volumeMounts:
+        - name: data
+          mountPath: {{ $.Values.app.node.storage.mountPath | quote }}
+        - name: templogs
+          mountPath: /tmp/logs
+      volumes:
+      - name: templogs
+        emptyDir: {}
+  {{- if $.Values.deployment.pvc.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ $.Release.Name }}-broker-{{ $nodeIndex }}-data
+  {{- else }}
+      - name: data
+        emptyDir: {}
+  {{- end }}
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+---
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-broker-pdb
+  labels:
+    app: {{ $.Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $.Release.Name }}
+      pod-type: broker
+  maxUnavailable: {{ $.Values.app.brokers.maxUnavailable }}
