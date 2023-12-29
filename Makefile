@@ -25,6 +25,9 @@ install-light: push
 	     --force \
 	     --set deployment.pvc.enabled=false
 
+render:
+	helm template ${RELEASE} ${CHARTPATH}
+
 install: push
 	helm upgrade ${RELEASE} ${CHARTPATH} \
 	     --namespace ${NS} \
@@ -32,8 +35,7 @@ install: push
 	     --install \
 	     --debug \
 	     --reset-values \
-	     --force \
-	     --set app.brokers.count=4
+	     --force
 
 delete-chart:
 	helm delete ${RELEASE} \

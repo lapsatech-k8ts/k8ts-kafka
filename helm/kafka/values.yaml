@@ -3,12 +3,22 @@ app:
     count: 3
     maxUnavailable: 1
   node:
+    listener:
+      external:
+        port:
+          printf: "909%d"
+        name:
+          printf: "%s-ext-broker-%s.%s.svc.cluster.local"
+      internal:
+        port:
+          number: 19092
+    svc:
+      name:
+        printf: "%s-ext-broker-%s"
     limits:
       memory: 400Mi
       cpu: 0.5
     terminationGracePeriodSeconds: 20
-    ports:
-      prefix: 909
     storage:
       mountPath: /opt/kafka/data
   kafka:
@@ -111,4 +121,4 @@ deployment:
     readiness:
       enabled: false
     liveness:
-      enabled: false
+      enabled: true

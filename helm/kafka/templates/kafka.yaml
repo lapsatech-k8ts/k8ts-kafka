@@ -1,46 +1,62 @@
-{{- $brokers := $.Values.app.brokers.count | int }}
-{{- range $nodeIndex := until $brokers }}
-  {{- $serverPort := add ( mul $.Values.app.node.ports.prefix 10 ) $nodeIndex | int }}
+{{- range $nodeIndex := until ( $.Values.app.brokers.count | int ) }}
+  {{- $portExt := ( printf $.Values.app.node.listener.external.port.printf $nodeIndex ) | int }}
+  {{- $svcName := ( printf $.Values.app.node.svc.name.printf $.Release.Name ( printf "%d" $nodeIndex ) ) }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ $.Release.Name }}-broker-{{ $nodeIndex }}
+  name: {{ $svcName }}
   labels:
     app: {{ $.Release.Name }}
     svc-type: broker
     node-index: '{{ $nodeIndex }}'
 spec:
   ports:
-  - name: server
-    port: {{ $serverPort }}
+  - name: server-ext
+    port: {{ $portExt }}
   selector:
     app: {{ $.Release.Name }}
     pod-type: broker
-    node-index: '{{ $nodeIndex }}'
+    apps.kubernetes.io/pod-index: '{{ $nodeIndex }}'
 ---
-apiVersion: apps/v1
-kind: Deployment
+{{- end }}
+apiVersion: v1
+kind: Service
 metadata:
-  name: {{ $.Release.Name }}-broker-{{ $nodeIndex }}
+  name: {{ $.Release.Name }}-hs
   labels:
     app: {{ $.Release.Name }}
-    deployment-type: broker
-    node-index: '{{ $nodeIndex }}'
+    svc-type: headless
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
+  ports:
+  - name: server-int
+    port: {{ $.Values.app.node.listener.internal.port.number | int }}
+  clusterIP: None
+  selector:
+    app: {{ $.Release.Name }}
+    pod-type: broker
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}-broker
+  labels:
+    app: {{ $.Release.Name }}
+    statefulset-type: broker
+spec:
   selector:
     matchLabels:
       app: {{ $.Release.Name }}
       pod-type: broker
-      node-index: '{{ $nodeIndex }}'
+  serviceName: {{ $.Release.Name }}-hs
+  replicas: {{ $.Values.app.brokers.count }}
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: OrderedReady
   template:
     metadata:
       labels:
         app: {{ $.Release.Name }}
         pod-type: broker
-        node-index: '{{ $nodeIndex }}'
     spec:
   {{- if eq $.Values.deployment.antiAffinity "hard"}}
       affinity:
@@ -85,15 +101,21 @@ spec:
             memory: {{ $.Values.app.node.limits.memory | quote }}
             cpu: {{ $.Values.app.node.limits.cpu | quote }}
         ports:
-        - name: server
-          containerPort: {{ $serverPort }}
+        - name: server-int
+          containerPort: {{ $.Values.app.node.listener.internal.port.number | int }}
+#        - name: server-ext
+#          containerPort: --can't evaluate in statefulset setup
         env:
-        - name: NODE_LISTEN_PORT
-          value: {{ $serverPort | quote }}
-        - name: NODE_SVC_NAME
-          value: "{{ $.Release.Name }}-broker-{{ $nodeIndex }}.{{ $.Release.Namespace }}.svc.cluster.local"
         - name: NODE_INDEX
-          value: "{{ $nodeIndex }}"
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+        - name: NODE_INT_PORT
+          value: {{ $.Values.app.node.listener.internal.port.number | quote }}
+        - name: NODE_EXT_NAME_PRINTF
+          value: {{ printf $.Values.app.node.listener.external.name.printf $.Release.Name "%s" $.Release.Namespace | quote }}
+        - name: NODE_EXT_PORT_PRINTF
+          value: {{ $.Values.app.node.listener.external.port.printf | quote }}
         - name: DATA_DIR
           value: "{{ $.Values.app.node.storage.mountPath }}/data"
         - name: LOCAL_LOGS_DIR
@@ -114,7 +136,7 @@ spec:
             command:
             - kafka-ready.sh
           failureThreshold: 10
-          initialDelaySeconds: 60
+          initialDelaySeconds: 10
           periodSeconds: 60
           timeoutSeconds: 30
   {{- end }}
@@ -136,19 +158,27 @@ spec:
       volumes:
       - name: templogs
         emptyDir: {}
-  {{- if $.Values.deployment.pvc.enabled }}
-      - name: data
-        persistentVolumeClaim:
-          claimName: {{ $.Release.Name }}-broker-{{ $nodeIndex }}-data
-  {{- else }}
+  {{- if not $.Values.deployment.pvc.enabled }}
       - name: data
         emptyDir: {}
   {{- end }}
       securityContext:
         fsGroup: 1000
         runAsUser: 1000
+  {{- if $.Values.deployment.pvc.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    labels:
+      app: {{ $.Release.Name }}
+      pvc-type: broker-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: "100Mi"
+  {{- end }}
 ---
-{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
