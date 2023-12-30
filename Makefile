@@ -47,9 +47,6 @@ drop-namespace:
 drop-pods:
 	kubectl get pod --namespace ${NS} -o name | xargs -I{} kubectl delete --grace-period=0 --namespace ${NS} {}
 
-create-pvcs:
-	kubectl create --namespace ${NS} -f pvc.yaml
-
 drop-pvcs:
 	kubectl get pvc --namespace ${NS} -o name | xargs -I{} kubectl delete --grace-period=0 --namespace ${NS} {}
 

@@ -2,19 +2,16 @@ app:
   brokers:
     count: 3
     maxUnavailable: 1
-  node:
+  broker:
     listener:
       external:
         port:
-          printf: "909%d"
-        name:
-          printf: "%s-ext-broker-%s.%s.svc.cluster.local"
+          number: 9092
+        address:
+          printf: "kafka-cluster-broker.local:909%d"
       internal:
         port:
           number: 19092
-    svc:
-      name:
-        printf: "%s-ext-broker-%s"
     limits:
       memory: 400Mi
       cpu: 0.5
@@ -22,7 +19,7 @@ app:
     storage:
       mountPath: /opt/kafka/data
   kafka:
-    heap: 200M
+    heap: 300M
     overrides:
       "AUTO_CREATE_TOPICS_ENABLE": "true"
       "AUTO_LEADER_REBALANCE_ENABLE": "true"
@@ -113,10 +110,24 @@ zk:
     port: 2181
 
 
+
 deployment:
   antiAffinity: none
+  security:
+    enabled: true
+    context:
+      fsGroup: 1000
+      runAsUser: 1000
   pvc:
     enabled: true
+    storage:
+      capacity: 100Mi
+      accessModes:
+      - ReadWriteOnce
+  svcExt:
+    enabled: true
+  pdb:
+    enabled: false
   probes:
     readiness:
       enabled: false
